@@ -1,0 +1,126 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+model chamado {
+  id                                     Int                @id @default(autoincrement())
+  titulo                                 String             @db.VarChar(150)
+  descricao                              String             @db.Text
+  status                                 chamado_status     @default(ABERTO)
+  prioridade                             chamado_prioridade @default(MEDIA)
+  solicitanteId                          Int
+  tecnicoId                              Int?
+  tipoProblemaId                         Int
+  motivoCancelamento                     String?            @db.Text
+  criadoEm                               DateTime           @default(now())
+  atualizadoEm                           DateTime
+  resolvidoEm                            DateTime?
+  fechadoEm                              DateTime?
+  usuario_chamado_solicitanteIdTousuario usuario            @relation("chamado_solicitanteIdTousuario", fields: [solicitanteId], references: [id], map: "Chamado_solicitanteId_fkey")
+  usuario_chamado_tecnicoIdTousuario     usuario?           @relation("chamado_tecnicoIdTousuario", fields: [tecnicoId], references: [id], map: "Chamado_tecnicoId_fkey")
+  tipoproblema                           tipoproblema       @relation(fields: [tipoProblemaId], references: [id], map: "Chamado_tipoProblemaId_fkey")
+  comentario                             comentario[]
+  historicochamado                       historicochamado[]
+  notificacao                            notificacao[]
+
+  @@index([criadoEm], map: "Chamado_criadoEm_idx")
+  @@index([prioridade], map: "Chamado_prioridade_idx")
+  @@index([solicitanteId], map: "Chamado_solicitanteId_idx")
+  @@index([status], map: "Chamado_status_idx")
+  @@index([tecnicoId, status], map: "Chamado_tecnicoId_status_idx")
+  @@index([tipoProblemaId], map: "Chamado_tipoProblemaId_fkey")
+}
+
+model comentario {
+  id        Int      @id @default(autoincrement())
+  conteudo  String   @db.Text
+  chamadoId Int
+  autorId   Int
+  criadoEm  DateTime @default(now())
+  usuario   usuario  @relation(fields: [autorId], references: [id], map: "Comentario_autorId_fkey")
+  chamado   chamado  @relation(fields: [chamadoId], references: [id], map: "Comentario_chamadoId_fkey")
+
+  @@index([autorId], map: "Comentario_autorId_fkey")
+  @@index([chamadoId, criadoEm], map: "Comentario_chamadoId_criadoEm_idx")
+}
+
+model historicochamado {
+  id        Int      @id @default(autoincrement())
+  acao      String   @db.VarChar(100)
+  detalhes  String?  @db.Text
+  chamadoId Int
+  usuarioId Int?
+  criadoEm  DateTime @default(now())
+  chamado   chamado  @relation(fields: [chamadoId], references: [id], map: "HistoricoChamado_chamadoId_fkey")
+  usuario   usuario? @relation(fields: [usuarioId], references: [id], map: "HistoricoChamado_usuarioId_fkey")
+
+  @@index([chamadoId, criadoEm], map: "HistoricoChamado_chamadoId_criadoEm_idx")
+  @@index([usuarioId], map: "HistoricoChamado_usuarioId_fkey")
+}
+
+model notificacao {
+  id        Int      @id @default(autoincrement())
+  tipo      String   @db.VarChar(60)
+  mensagem  String   @db.Text
+  lida      Boolean  @default(false)
+  usuarioId Int
+  chamadoId Int?
+  criadoEm  DateTime @default(now())
+  chamado   chamado? @relation(fields: [chamadoId], references: [id], map: "Notificacao_chamadoId_fkey")
+  usuario   usuario  @relation(fields: [usuarioId], references: [id], map: "Notificacao_usuarioId_fkey")
+
+  @@index([chamadoId], map: "Notificacao_chamadoId_fkey")
+  @@index([usuarioId, lida], map: "Notificacao_usuarioId_lida_idx")
+}
+
+model tipoproblema {
+  id        Int       @id @default(autoincrement())
+  nome      String    @unique(map: "TipoProblema_nome_key") @db.VarChar(100)
+  descricao String?   @db.Text
+  ativo     Boolean   @default(true)
+  criadoEm  DateTime  @default(now())
+  chamado   chamado[]
+}
+
+model usuario {
+  id                                     Int                @id @default(autoincrement())
+  nome                                   String             @db.VarChar(100)
+  email                                  String             @unique(map: "Usuario_email_key")
+  ativo                                  Boolean            @default(true)
+  atualizadoEm                           DateTime
+  criadoEm                               DateTime           @default(now())
+  perfil                                 usuario_perfil     @default(SOLICITANTE)
+  senhaHash                              String             @db.VarChar(255)
+  chamado_chamado_solicitanteIdTousuario chamado[]          @relation("chamado_solicitanteIdTousuario")
+  chamado_chamado_tecnicoIdTousuario     chamado[]          @relation("chamado_tecnicoIdTousuario")
+  comentario                             comentario[]
+  historicochamado                       historicochamado[]
+  notificacao                            notificacao[]
+}
+
+enum chamado_status {
+  ABERTO
+  EM_ATENDIMENTO
+  PENDENTE
+  RESOLVIDO
+  FECHADO
+  CANCELADO
+}
+
+enum chamado_prioridade {
+  BAIXA
+  MEDIA
+  ALTA
+  URGENTE
+}
+
+enum usuario_perfil {
+  SOLICITANTE
+  TECNICO
+  ADMIN
+}
