@@ -1,4 +1,3 @@
-
 import {
   BadRequestException,
   ForbiddenException,
@@ -9,6 +8,13 @@ import {
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CriarChamadoDto } from './dto/criar-chamado.dto.js';
 import { AtualizarChamadoDto } from './dto/atualizar-chamado.dto.js';
+import { AlterarStatusDto } from './dto/alterar-status.dto.js';
+import { CriarComentarioDto } from './dto/criar-comentario.dto.js';
+import {
+  LIMITE_ATENDIMENTOS_POR_TECNICO,
+  chamadoEncerrado,
+  transicaoPermitida,
+} from './chamado-regras.js';
 
 import {
   PerfilUsuario,
@@ -16,13 +22,13 @@ import {
   StatusChamado,
 } from '../generated/prisma/client.js';
 
-type UsuarioLogado = {
+export type UsuarioLogado = {
   id: number;
   email: string;
   perfil: string;
 };
 
-type FiltrosChamado = {
+export type FiltrosChamado = {
   status?: StatusChamado;
   prioridade?: PrioridadeChamado;
   tecnicoId?: number;
@@ -34,24 +40,19 @@ type FiltrosChamado = {
 export class ChamadosService {
   constructor(private readonly prisma: PrismaService) {}
 
-  // Cadastra um chamado usando o ID do usuário autenticado.
+  // Regras 8, 9, 10, 11 e 6: abre um chamado (nasce ABERTO e sem técnico).
   async criar(dto: CriarChamadoDto, solicitanteId: number) {
     const solicitante = await this.prisma.usuario.findUnique({
       where: { id: solicitanteId },
     });
 
     if (!solicitante || !solicitante.ativo) {
-      throw new BadRequestException(
-        'Solicitante não encontrado ou inativo.',
-      );
+      throw new BadRequestException('Solicitante não encontrado ou inativo.');
     }
 
-    if (
-      solicitante.perfil !== PerfilUsuario.SOLICITANTE &&
-      solicitante.perfil !== PerfilUsuario.ADMIN
-    ) {
+    if (solicitante.perfil !== PerfilUsuario.SOLICITANTE) {
       throw new ForbiddenException(
-        'Este perfil não pode abrir chamados.',
+        'Somente solicitantes podem abrir chamados.',
       );
     }
 
@@ -71,13 +72,13 @@ export class ChamadosService {
           titulo: dto.titulo,
           descricao: dto.descricao,
           prioridade: dto.prioridade ?? PrioridadeChamado.MEDIA,
+          status: StatusChamado.ABERTO,
+          tecnicoId: null,
           solicitanteId,
           tipoProblemaId: dto.tipoProblemaId,
         },
         include: {
-          solicitante: {
-            select: { id: true, nome: true, email: true },
-          },
+          solicitante: { select: { id: true, nome: true, email: true } },
           tipoProblema: true,
         },
       });
@@ -95,59 +96,37 @@ export class ChamadosService {
     });
   }
 
-  // Lista chamados respeitando o perfil do usuário autenticado.
-  async listar(
-    filtros: FiltrosChamado,
-    usuarioLogado: UsuarioLogado,
-  ) {
-    let restricaoPerfil: { solicitanteId?: number; tecnicoId?: number } = {};
-
-    if (usuarioLogado.perfil === PerfilUsuario.SOLICITANTE) {
-      restricaoPerfil = { solicitanteId: usuarioLogado.id };
-    } else if (usuarioLogado.perfil === PerfilUsuario.TECNICO) {
-      restricaoPerfil = { tecnicoId: usuarioLogado.id };
-    } else if (usuarioLogado.perfil !== PerfilUsuario.ADMIN) {
-      throw new ForbiddenException(
-        'Você não tem permissão para consultar chamados.',
-      );
-    }
+  // Solicitante vê só os seus; técnico vê todos (precisa ver a fila para atender).
+  async listar(filtros: FiltrosChamado, usuarioLogado: UsuarioLogado) {
+    const restricao =
+      usuarioLogado.perfil === PerfilUsuario.SOLICITANTE
+        ? { solicitanteId: usuarioLogado.id }
+        : {};
 
     return this.prisma.chamado.findMany({
-      where: {
-        ...filtros,
-        ...restricaoPerfil,
-      },
+      where: { ...filtros, ...restricao },
       include: {
-        solicitante: {
-          select: { id: true, nome: true },
-        },
-        tecnico: {
-          select: { id: true, nome: true },
-        },
+        solicitante: { select: { id: true, nome: true } },
+        tecnico: { select: { id: true, nome: true } },
         tipoProblema: true,
       },
       orderBy: { criadoEm: 'desc' },
     });
   }
 
-  // Busca um chamado e verifica se o usuário pode consultá-lo.
+  // Chamado com toda a conversa (e o histórico de andamento).
   async buscarPorId(id: number, usuarioLogado: UsuarioLogado) {
     const chamado = await this.prisma.chamado.findUnique({
       where: { id },
       include: {
-        solicitante: {
-          select: { id: true, nome: true, email: true },
-        },
-        tecnico: {
-          select: { id: true, nome: true, email: true },
-        },
+        solicitante: { select: { id: true, nome: true, email: true } },
+        tecnico: { select: { id: true, nome: true, email: true } },
         tipoProblema: true,
         comentarios: {
           orderBy: { criadoEm: 'asc' },
+          include: { autor: { select: { id: true, nome: true } } },
         },
-        historicos: {
-          orderBy: { criadoEm: 'asc' },
-        },
+        historicos: { orderBy: { criadoEm: 'asc' } },
       },
     });
 
@@ -155,18 +134,10 @@ export class ChamadosService {
       throw new NotFoundException('Chamado não encontrado.');
     }
 
-    const ehAdmin =
-      usuarioLogado.perfil === PerfilUsuario.ADMIN;
+    const ehTecnico = usuarioLogado.perfil === PerfilUsuario.TECNICO;
+    const ehDono = chamado.solicitanteId === usuarioLogado.id;
 
-    const ehSolicitante =
-      usuarioLogado.perfil === PerfilUsuario.SOLICITANTE &&
-      chamado.solicitanteId === usuarioLogado.id;
-
-    const ehTecnicoResponsavel =
-      usuarioLogado.perfil === PerfilUsuario.TECNICO &&
-      chamado.tecnicoId === usuarioLogado.id;
-
-    if (!ehAdmin && !ehSolicitante && !ehTecnicoResponsavel) {
+    if (!ehTecnico && !ehDono) {
       throw new ForbiddenException(
         'Você não tem permissão para consultar este chamado.',
       );
@@ -175,127 +146,287 @@ export class ChamadosService {
     return chamado;
   }
 
-  // Atualiza um chamado e registra o usuário responsável pela operação.
+  // Regra 15: chamado encerrado não pode ser alterado.
   async atualizar(
     id: number,
     dto: AtualizarChamadoDto,
     usuarioLogado: UsuarioLogado,
   ) {
-    // Primeiro, localiza o chamado sem expor seus dados ao cliente.
-    const chamadoAtual = await this.prisma.chamado.findUnique({
-      where: { id },
-    });
+    const chamado = await this.obterChamado(id);
 
-    if (!chamadoAtual) {
-      throw new NotFoundException('Chamado não encontrado.');
-    }
+    this.exigirParticipante(chamado, usuarioLogado);
 
-    const ehAdmin =
-      usuarioLogado.perfil === PerfilUsuario.ADMIN;
-
-    const ehTecnicoResponsavel =
-      usuarioLogado.perfil === PerfilUsuario.TECNICO &&
-      chamadoAtual.tecnicoId === usuarioLogado.id;
-
-    if (!ehAdmin && !ehTecnicoResponsavel) {
-      throw new ForbiddenException(
-        'Você não tem permissão para atualizar este chamado.',
-      );
-    }
-
-    // Técnico não pode transferir o chamado para outra pessoa.
-    if (
-      !ehAdmin &&
-      dto.tecnicoId !== undefined &&
-      dto.tecnicoId !== usuarioLogado.id
-    ) {
-      throw new ForbiddenException(
-        'Somente o administrador pode alterar o técnico responsável.',
-      );
-    }
-
-    if (dto.tecnicoId !== undefined && dto.tecnicoId !== null) {
-      const tecnico = await this.prisma.usuario.findUnique({
-        where: { id: dto.tecnicoId },
-      });
-
-      if (
-        !tecnico ||
-        !tecnico.ativo ||
-        (
-          tecnico.perfil !== PerfilUsuario.TECNICO &&
-          tecnico.perfil !== PerfilUsuario.ADMIN
-        )
-      ) {
-        throw new BadRequestException(
-          'Técnico não encontrado, inativo ou sem perfil autorizado.',
-        );
-      }
-    }
-
-    if (
-      dto.status === StatusChamado.CANCELADO &&
-      !dto.motivoCancelamento?.trim()
-    ) {
-      throw new BadRequestException(
-        'Informe o motivo do cancelamento.',
-      );
-    }
-
-    if (
-      chamadoAtual.status === StatusChamado.FECHADO ||
-      chamadoAtual.status === StatusChamado.CANCELADO
-    ) {
+    if (chamadoEncerrado(chamado.status)) {
       throw new BadRequestException(
         'Não é possível alterar um chamado fechado ou cancelado.',
       );
     }
 
-    const dados = {
-      ...(dto.titulo !== undefined && { titulo: dto.titulo }),
-      ...(dto.descricao !== undefined && { descricao: dto.descricao }),
-      ...(dto.prioridade !== undefined && {
-        prioridade: dto.prioridade,
-      }),
-      ...(dto.tecnicoId !== undefined && {
-        tecnicoId: dto.tecnicoId,
-      }),
-      ...(dto.motivoCancelamento !== undefined && {
-        motivoCancelamento: dto.motivoCancelamento,
-      }),
-      ...(dto.status !== undefined && { status: dto.status }),
-      ...(dto.status === StatusChamado.RESOLVIDO && {
-        resolvidoEm: new Date(),
-      }),
-      ...(dto.status === StatusChamado.FECHADO && {
-        fechadoEm: new Date(),
-      }),
-    };
-
     return this.prisma.$transaction(async (tx) => {
       const atualizado = await tx.chamado.update({
         where: { id },
-        data: dados,
+        data: {
+          ...(dto.titulo !== undefined && { titulo: dto.titulo }),
+          ...(dto.descricao !== undefined && { descricao: dto.descricao }),
+          ...(dto.prioridade !== undefined && { prioridade: dto.prioridade }),
+        },
       });
 
-      // Registra quem realizou a alteração.
       await tx.historicoChamado.create({
         data: {
           chamadoId: id,
           usuarioId: usuarioLogado.id,
           acao: 'CHAMADO_ATUALIZADO',
+          detalhes: JSON.stringify(dto),
+        },
+      });
+
+      return atualizado;
+    });
+  }
+
+  // Regras 3, 12, 13, 15, 17 e 18: designa técnico e inicia o atendimento.
+  async designarTecnico(
+    id: number,
+    tecnicoId: number,
+    usuarioLogado: UsuarioLogado,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const chamado = await tx.chamado.findUnique({ where: { id } });
+
+      if (!chamado) {
+        throw new NotFoundException('Chamado não encontrado.');
+      }
+
+      if (chamadoEncerrado(chamado.status)) {
+        throw new BadRequestException(
+          'Não é possível alterar um chamado fechado ou cancelado.',
+        );
+      }
+
+      if (
+        chamado.status !== StatusChamado.ABERTO &&
+        chamado.status !== StatusChamado.EM_ATENDIMENTO
+      ) {
+        throw new BadRequestException(
+          'Só é possível designar técnico em chamado aberto ou em atendimento.',
+        );
+      }
+
+      const tecnico = await tx.usuario.findUnique({
+        where: { id: tecnicoId },
+      });
+
+      if (!tecnico || tecnico.perfil !== PerfilUsuario.TECNICO) {
+        throw new BadRequestException('Técnico não encontrado.');
+      }
+
+      if (!tecnico.ativo) {
+        throw new BadRequestException('O técnico informado está inativo.');
+      }
+
+      if (tecnico.id === chamado.solicitanteId) {
+        throw new BadRequestException(
+          'Ninguém pode atender o próprio chamado.',
+        );
+      }
+
+      if (chamado.tecnicoId === tecnico.id) {
+        throw new BadRequestException(
+          'Este técnico já é o responsável pelo chamado.',
+        );
+      }
+
+      await this.validarLimiteDeAtendimentos(tx, tecnico.id);
+
+      const atualizado = await tx.chamado.update({
+        where: { id },
+        data: {
+          tecnicoId: tecnico.id,
+          status: StatusChamado.EM_ATENDIMENTO,
+        },
+      });
+
+      await tx.historicoChamado.create({
+        data: {
+          chamadoId: id,
+          usuarioId: usuarioLogado.id,
+          acao: 'TECNICO_DESIGNADO',
           detalhes: JSON.stringify({
-            antes: {
-              status: chamadoAtual.status,
-              prioridade: chamadoAtual.prioridade,
-              tecnicoId: chamadoAtual.tecnicoId,
-            },
-            alteracoes: dto,
+            tecnicoAnterior: chamado.tecnicoId,
+            tecnicoNovo: tecnico.id,
+            statusAnterior: chamado.status,
           }),
         },
       });
 
       return atualizado;
     });
+  }
+
+  // Regras 14, 15, 16 e 17: muda a situação respeitando o fluxo permitido.
+  async alterarStatus(
+    id: number,
+    dto: AlterarStatusDto,
+    usuarioLogado: UsuarioLogado,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const chamado = await tx.chamado.findUnique({ where: { id } });
+
+      if (!chamado) {
+        throw new NotFoundException('Chamado não encontrado.');
+      }
+
+      if (chamadoEncerrado(chamado.status)) {
+        throw new BadRequestException(
+          'Não é possível alterar um chamado fechado ou cancelado.',
+        );
+      }
+
+      this.exigirParticipante(chamado, usuarioLogado);
+
+      const de = chamado.status;
+      const para = dto.status;
+
+      if (!transicaoPermitida(de, para)) {
+        throw new BadRequestException(
+          `Transição de ${de} para ${para} não é permitida.`,
+        );
+      }
+
+      // Regra 13: o atendimento só começa pela designação de um técnico.
+      if (de === StatusChamado.ABERTO && para === StatusChamado.EM_ATENDIMENTO) {
+        throw new BadRequestException(
+          'Para iniciar o atendimento, designe um técnico ao chamado.',
+        );
+      }
+
+      // Somente o técnico responsável marca o chamado como resolvido.
+      if (
+        para === StatusChamado.RESOLVIDO &&
+        chamado.tecnicoId !== usuarioLogado.id
+      ) {
+        throw new ForbiddenException(
+          'Somente o técnico responsável pode resolver o chamado.',
+        );
+      }
+
+      // Regra 17: reabrir devolve o chamado ao técnico, que não pode estourar o limite.
+      if (de === StatusChamado.RESOLVIDO && para === StatusChamado.EM_ATENDIMENTO) {
+        if (chamado.tecnicoId === null) {
+          throw new BadRequestException('Chamado sem técnico responsável.');
+        }
+        await this.validarLimiteDeAtendimentos(tx, chamado.tecnicoId);
+      }
+
+      const agora = new Date();
+
+      const atualizado = await tx.chamado.update({
+        where: { id },
+        data: {
+          status: para,
+          ...(para === StatusChamado.RESOLVIDO && { resolvidoEm: agora }),
+          ...(para === StatusChamado.EM_ATENDIMENTO && { resolvidoEm: null }),
+          ...(para === StatusChamado.FECHADO && { fechadoEm: agora }),
+          ...(para === StatusChamado.CANCELADO &&
+            dto.motivoCancelamento !== undefined && {
+              motivoCancelamento: dto.motivoCancelamento,
+            }),
+        },
+      });
+
+      await tx.historicoChamado.create({
+        data: {
+          chamadoId: id,
+          usuarioId: usuarioLogado.id,
+          acao: 'STATUS_ALTERADO',
+          detalhes: JSON.stringify({ de, para, em: agora.toISOString() }),
+        },
+      });
+
+      return atualizado;
+    });
+  }
+
+  // Regras 3, 15, 19, 20 e 21: registra um comentário (nunca editado/apagado).
+  async comentar(
+    chamadoId: number,
+    dto: CriarComentarioDto,
+    usuarioLogado: UsuarioLogado,
+  ) {
+    const chamado = await this.obterChamado(chamadoId);
+
+    const autor = await this.prisma.usuario.findUnique({
+      where: { id: usuarioLogado.id },
+    });
+
+    if (!autor || !autor.ativo) {
+      throw new ForbiddenException('Usuário inativo não pode comentar.');
+    }
+
+    if (chamadoEncerrado(chamado.status)) {
+      throw new BadRequestException(
+        'Chamados fechados ou cancelados não recebem comentários.',
+      );
+    }
+
+    this.exigirParticipante(chamado, usuarioLogado);
+
+    const conteudo = dto.conteudo?.trim();
+
+    if (!conteudo) {
+      throw new BadRequestException('O comentário não pode ser vazio.');
+    }
+
+    return this.prisma.comentario.create({
+      data: { conteudo, chamadoId, autorId: usuarioLogado.id },
+      include: { autor: { select: { id: true, nome: true } } },
+    });
+  }
+
+  // ---------- auxiliares ----------
+
+  private async obterChamado(id: number) {
+    const chamado = await this.prisma.chamado.findUnique({ where: { id } });
+
+    if (!chamado) {
+      throw new NotFoundException('Chamado não encontrado.');
+    }
+
+    return chamado;
+  }
+
+  // Participantes: quem abriu o chamado e o técnico responsável (regra 19).
+  private exigirParticipante(
+    chamado: { solicitanteId: number; tecnicoId: number | null },
+    usuario: UsuarioLogado,
+  ) {
+    const ehSolicitante = chamado.solicitanteId === usuario.id;
+    const ehTecnicoResponsavel = chamado.tecnicoId === usuario.id;
+
+    if (!ehSolicitante && !ehTecnicoResponsavel) {
+      throw new ForbiddenException(
+        'Somente quem abriu o chamado e o técnico responsável podem realizar esta operação.',
+      );
+    }
+  }
+
+  // Regra 17: no máximo 5 chamados EM_ATENDIMENTO por técnico.
+  // O SELECT ... FOR UPDATE serializa designações simultâneas para o mesmo técnico.
+  private async validarLimiteDeAtendimentos(
+    tx: Pick<PrismaService, 'chamado' | '$queryRaw'>,
+    tecnicoId: number,
+  ) {
+    await tx.$queryRaw`SELECT id FROM Usuario WHERE id = ${tecnicoId} FOR UPDATE`;
+
+    const emAtendimento = await tx.chamado.count({
+      where: { tecnicoId, status: StatusChamado.EM_ATENDIMENTO },
+    });
+
+    if (emAtendimento >= LIMITE_ATENDIMENTOS_POR_TECNICO) {
+      throw new BadRequestException(
+        `O técnico já possui ${LIMITE_ATENDIMENTOS_POR_TECNICO} chamados em atendimento.`,
+      );
+    }
   }
 }

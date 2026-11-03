@@ -1,18 +1,17 @@
-/*
-  Warnings:
+-- CreateTable
+CREATE TABLE `Usuario` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `nome` VARCHAR(100) NOT NULL,
+    `email` VARCHAR(191) NOT NULL,
+    `senhaHash` VARCHAR(255) NOT NULL,
+    `perfil` ENUM('SOLICITANTE', 'TECNICO') NOT NULL DEFAULT 'SOLICITANTE',
+    `ativo` BOOLEAN NOT NULL DEFAULT true,
+    `criadoEm` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `atualizadoEm` DATETIME(3) NOT NULL,
 
-  - You are about to drop the column `createdAt` on the `usuario` table. All the data in the column will be lost.
-  - Added the required column `atualizadoEm` to the `Usuario` table without a default value. This is not possible if the table is not empty.
-  - Added the required column `senhaHash` to the `Usuario` table without a default value. This is not possible if the table is not empty.
-
-*/
--- AlterTable
-ALTER TABLE `usuario` DROP COLUMN `createdAt`,
-    ADD COLUMN `atualizadoEm` DATETIME(3) NOT NULL,
-    ADD COLUMN `criadoEm` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    ADD COLUMN `perfil` ENUM('SOLICITANTE', 'TECNICO', 'ADMIN') NOT NULL DEFAULT 'SOLICITANTE',
-    ADD COLUMN `senhaHash` VARCHAR(255) NOT NULL,
-    MODIFY `email` VARCHAR(191) NOT NULL;
+    UNIQUE INDEX `Usuario_email_key`(`email`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
 CREATE TABLE `TipoProblema` (
@@ -29,10 +28,10 @@ CREATE TABLE `TipoProblema` (
 -- CreateTable
 CREATE TABLE `Chamado` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `titulo` VARCHAR(150) NOT NULL,
+    `titulo` VARCHAR(100) NOT NULL,
     `descricao` TEXT NOT NULL,
-    `status` ENUM('ABERTO', 'EM_ATENDIMENTO', 'PENDENTE', 'RESOLVIDO', 'FECHADO', 'CANCELADO') NOT NULL DEFAULT 'ABERTO',
-    `prioridade` ENUM('BAIXA', 'MEDIA', 'ALTA', 'URGENTE') NOT NULL DEFAULT 'MEDIA',
+    `status` ENUM('ABERTO', 'EM_ATENDIMENTO', 'RESOLVIDO', 'FECHADO', 'CANCELADO') NOT NULL DEFAULT 'ABERTO',
+    `prioridade` ENUM('BAIXA', 'MEDIA', 'ALTA', 'CRITICA') NOT NULL DEFAULT 'MEDIA',
     `solicitanteId` INTEGER NOT NULL,
     `tecnicoId` INTEGER NULL,
     `tipoProblemaId` INTEGER NOT NULL,
@@ -47,6 +46,7 @@ CREATE TABLE `Chamado` (
     INDEX `Chamado_criadoEm_idx`(`criadoEm`),
     INDEX `Chamado_tecnicoId_status_idx`(`tecnicoId`, `status`),
     INDEX `Chamado_solicitanteId_idx`(`solicitanteId`),
+    INDEX `Chamado_tipoProblemaId_idx`(`tipoProblemaId`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -59,6 +59,7 @@ CREATE TABLE `Comentario` (
     `criadoEm` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
 
     INDEX `Comentario_chamadoId_criadoEm_idx`(`chamadoId`, `criadoEm`),
+    INDEX `Comentario_autorId_idx`(`autorId`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -72,20 +73,7 @@ CREATE TABLE `HistoricoChamado` (
     `criadoEm` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
 
     INDEX `HistoricoChamado_chamadoId_criadoEm_idx`(`chamadoId`, `criadoEm`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
-CREATE TABLE `Notificacao` (
-    `id` INTEGER NOT NULL AUTO_INCREMENT,
-    `tipo` VARCHAR(60) NOT NULL,
-    `mensagem` TEXT NOT NULL,
-    `lida` BOOLEAN NOT NULL DEFAULT false,
-    `usuarioId` INTEGER NOT NULL,
-    `chamadoId` INTEGER NULL,
-    `criadoEm` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-
-    INDEX `Notificacao_usuarioId_lida_idx`(`usuarioId`, `lida`),
+    INDEX `HistoricoChamado_usuarioId_idx`(`usuarioId`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -109,9 +97,3 @@ ALTER TABLE `HistoricoChamado` ADD CONSTRAINT `HistoricoChamado_chamadoId_fkey` 
 
 -- AddForeignKey
 ALTER TABLE `HistoricoChamado` ADD CONSTRAINT `HistoricoChamado_usuarioId_fkey` FOREIGN KEY (`usuarioId`) REFERENCES `Usuario`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `Notificacao` ADD CONSTRAINT `Notificacao_usuarioId_fkey` FOREIGN KEY (`usuarioId`) REFERENCES `Usuario`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE `Notificacao` ADD CONSTRAINT `Notificacao_chamadoId_fkey` FOREIGN KEY (`chamadoId`) REFERENCES `Chamado`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;

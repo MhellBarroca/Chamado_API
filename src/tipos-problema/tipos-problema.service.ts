@@ -90,4 +90,22 @@ export class TiposProblemaService {
       data: { ativo: false },
     });
   }
+
+  // Regra 7: tipo já usado em chamado não pode ser removido, apenas desativado.
+  async remover(id: number) {
+    await this.buscarPorId(id);
+
+    const usos = await this.prisma.chamado.count({
+      where: { tipoProblemaId: id },
+    });
+
+    if (usos > 0) {
+      throw new ConflictException(
+        'Este tipo de problema já foi usado em chamados e não pode ser removido. Desative-o.',
+      );
+    }
+
+    await this.prisma.tipoProblema.delete({ where: { id } });
+    return { removido: true };
+  }
 }

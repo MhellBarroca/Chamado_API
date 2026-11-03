@@ -2,6 +2,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseIntPipe,
@@ -26,9 +27,9 @@ export class TiposProblemaController {
   ) {}
 
   // POST /tipos-problema
-  // Somente ADMIN pode cadastrar tipos de problema.
+  // Somente técnicos pode cadastrar tipos de problema.
   @Post()
-  @Roles('ADMIN')
+  @Roles('TECNICO')
   criar(@Body() dto: CriarTipoProblemaDto) {
     return this.tiposProblemaService.criar(dto);
   }
@@ -48,9 +49,9 @@ export class TiposProblemaController {
   }
 
   // PATCH /tipos-problema/:id
-  // Somente ADMIN pode atualizar.
+  // Somente técnicos pode atualizar.
   @Patch(':id')
-  @Roles('ADMIN')
+  @Roles('TECNICO')
   atualizar(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: AtualizarTipoProblemaDto,
@@ -59,10 +60,18 @@ export class TiposProblemaController {
   }
 
   // PATCH /tipos-problema/:id/desativar
-  // Somente ADMIN pode desativar.
+  // Somente técnicos pode desativar.
   @Patch(':id/desativar')
-  @Roles('ADMIN')
+  @Roles('TECNICO')
   desativar(@Param('id', ParseIntPipe) id: number) {
     return this.tiposProblemaService.desativar(id);
+  }
+
+  // DELETE /tipos-problema/:id
+  // Somente técnicos; bloqueado se o tipo já foi usado em algum chamado.
+  @Delete(':id')
+  @Roles('TECNICO')
+  remover(@Param('id', ParseIntPipe) id: number) {
+    return this.tiposProblemaService.remover(id);
   }
 }
